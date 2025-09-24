@@ -177,6 +177,7 @@ class ComponentModel(LoadableModule):
         names_out: list[str] = []
         matched_patterns: set[str] = set()
         for name, _ in model.named_modules():
+            print(name)
             for pattern in target_module_patterns:
                 if fnmatch.fnmatch(name, pattern):
                     matched_patterns.add(pattern)

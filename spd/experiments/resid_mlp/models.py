@@ -183,3 +183,58 @@ class ResidMLP(LoadableModule):
         """Fetch a pretrained model from wandb or a local path to a checkpoint."""
         run_info = ResidMLPTargetRunInfo.from_path(path)
         return cls.from_run_info(run_info)
+
+
+
+class ResidMLPWithModules(LoadableModule):
+    def __init__(self, config: ResidMLPModelConfig):
+        super().__init__()
+        self.config = config
+
+        # W_E: projects from n_features -> d_embed
+        self.W_E = nn.Linear(config.n_features, config.d_embed, bias=False)
+        init_param_(self.W_E.weight, fan_val=config.n_features, nonlinearity="linear")
+
+        # W_U: projects from d_embed -> n_features
+        self.W_U = nn.Linear(config.d_embed, config.n_features, bias=False)
+        init_param_(self.W_U.weight, fan_val=config.d_embed, nonlinearity="linear")
+
+        assert config.act_fn_name in ["gelu", "relu"]
+        self.act_fn = F.gelu if config.act_fn_name == "gelu" else F.relu
+        self.layers = nn.ModuleList(
+            [
+                MLP(
+                    d_model=config.d_embed,
+                    d_mlp=config.d_mlp,
+                    act_fn=self.act_fn,
+                    in_bias=config.in_bias,
+                    out_bias=config.out_bias,
+                )
+                for _ in range(config.n_layers)
+            ]
+        )
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, "... n_features"],
+        return_residual: bool = False,
+    ) -> Float[torch.Tensor, "... n_features"] | Float[torch.Tensor, "... d_embed"]:
+        # Linear projection replaces einsum
+        residual = self.W_E(x)
+        for layer in self.layers:
+            out = layer(residual)
+            residual = residual + out
+        if return_residual:
+            return residual
+        out = self.W_U(residual)
+        return out
+    
+    @classmethod
+    @override
+    def from_run_info(cls, run_info: RunInfo[ResidMLPTrainConfig]) -> "ResidMLP":
+        return None
+
+    @classmethod
+    @override
+    def from_pretrained(cls, path: ModelPath) -> "ResidMLP":
+        return None

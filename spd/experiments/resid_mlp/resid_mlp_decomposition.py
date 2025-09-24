@@ -11,6 +11,7 @@ from spd.experiments.resid_mlp.configs import ResidMLPTaskConfig
 from spd.experiments.resid_mlp.models import (
     ResidMLP,
     ResidMLPTargetRunInfo,
+    ResidMLPWithModules,
 )
 from spd.experiments.resid_mlp.resid_mlp_dataset import ResidMLPDataset
 from spd.log import logger
@@ -24,6 +25,23 @@ from spd.utils.general_utils import (
 )
 from spd.utils.run_utils import get_output_dir, save_file
 from spd.utils.wandb_utils import init_wandb
+import torch
+
+
+def clone_resid_mlp_with_modules(model: ResidMLP):
+    """Convert an existing ResidMLP with Parameter weights into one with nn.Linear modules."""
+    new_model = ResidMLPWithModules(model.config)
+
+    # Copy weights into Linear layers
+    with torch.no_grad():
+        new_model.W_E.weight.copy_(model.W_E.T)  # because einsum used (n_features, d_embed)
+        new_model.W_U.weight.copy_(model.W_U.T)  # because einsum used (d_embed, n_features)
+
+    # Copy over MLP layers
+    for old_layer, new_layer in zip(model.layers, new_model.layers):
+        new_layer.load_state_dict(old_layer.state_dict())
+
+    return new_model
 
 
 def main(
@@ -57,6 +75,10 @@ def main(
     assert config.pretrained_model_path, "pretrained_model_path must be set"
     target_run_info = ResidMLPTargetRunInfo.from_path(config.pretrained_model_path)
     target_model = ResidMLP.from_run_info(target_run_info)
+    target_model = target_model.to(device)
+    target_model.eval()
+
+    target_model = clone_resid_mlp_with_modules(target_model)
     target_model = target_model.to(device)
     target_model.eval()
 
