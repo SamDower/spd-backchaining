@@ -8,12 +8,10 @@ import wandb
 
 from spd.configs import Config
 from spd.experiments.resid_mlp.configs import ResidMLPTaskConfig
-from spd.experiments.resid_mlp.models import (
-    ResidMLP,
-    ResidMLPTargetRunInfo,
-    ResidMLPWithModules,
+from spd.experiments.mlp.models import (
+    SparseMLP
 )
-from spd.experiments.resid_mlp.resid_mlp_dataset import ResidMLPDataset
+from spd.experiments.mlp.mlp_dataset import ToySparseArithmeticDataset
 from spd.log import logger
 from spd.run_spd import optimize
 from spd.utils.data_utils import DatasetGeneratedDataLoader
@@ -27,21 +25,6 @@ from spd.utils.run_utils import get_output_dir, save_file
 from spd.utils.wandb_utils import init_wandb
 import torch
 
-
-def clone_resid_mlp_with_modules(model: ResidMLP):
-    """Convert an existing ResidMLP with Parameter weights into one with nn.Linear modules."""
-    new_model = ResidMLPWithModules(model.config)
-
-    # Copy weights into Linear layers
-    with torch.no_grad():
-        new_model.W_E.weight.copy_(model.W_E.T)  # because einsum used (n_features, d_embed)
-        new_model.W_U.weight.copy_(model.W_U.T)  # because einsum used (d_embed, n_features)
-
-    # Copy over MLP layers
-    for old_layer, new_layer in zip(model.layers, new_model.layers):
-        new_layer.load_state_dict(old_layer.state_dict())
-
-    return new_model
 
 
 def main(
@@ -72,15 +55,13 @@ def main(
     logger.info(f"Using device: {device}")
     assert isinstance(config.task_config, ResidMLPTaskConfig)
 
-    assert config.pretrained_model_path, "pretrained_model_path must be set"
-    target_run_info = ResidMLPTargetRunInfo.from_path(config.pretrained_model_path)
-    target_model = ResidMLP.from_run_info(target_run_info)
+
+    target_model = SparseMLP()
+    # load target model from .pth file
+    target_model.load_state_dict(torch.load("spd/experiments/mlp/arithmetic_model.pth", map_location=device))
     target_model = target_model.to(device)
     target_model.eval()
 
-    target_model = clone_resid_mlp_with_modules(target_model)
-    target_model = target_model.to(device)
-    target_model.eval()
 
     if config.wandb_project:
         assert wandb.run, "wandb.run must be initialized before training"
@@ -93,25 +74,15 @@ def main(
         spd_config=config,
         sweep_params=sweep_params,
         target_model=target_model,
-        train_config=target_run_info.config,
+        train_config=None,
         task_name=config.task_config.task_name,
     )
-    save_file(target_run_info.label_coeffs.detach().cpu().tolist(), out_dir / "label_coeffs.json")
+    #save_file(target_run_info.label_coeffs.detach().cpu().tolist(), out_dir / "label_coeffs.json")
     if config.wandb_project:
         wandb.save(str(out_dir / "label_coeffs.json"), base_path=out_dir, policy="now")
 
-    synced_inputs = target_run_info.config.synced_inputs
-    dataset = ResidMLPDataset(
-        n_features=target_model.config.n_features,
-        feature_probability=config.task_config.feature_probability,
+    dataset = ToySparseArithmeticDataset(
         device=device,
-        calc_labels=False,  # Our labels will be the output of the target model
-        label_type=None,
-        act_fn_name=None,
-        label_fn_seed=None,
-        label_coeffs=None,
-        data_generation_type=config.task_config.data_generation_type,
-        synced_inputs=synced_inputs,
     )
 
     train_loader = DatasetGeneratedDataLoader(
